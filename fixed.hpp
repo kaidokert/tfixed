@@ -4,12 +4,42 @@
 // accompanying file LICENSE_1_0.txt or copy at
 // http://www.boost.org/LICENSE_1_0.txt)
 // (C) Copyright 2007 Anthony Williams
+//
+// Extensions and bug/compilation fixes by John Wharington 2009
+
+#ifndef FIXED_MATH
+#include <math.h>
+#define FIXED_DOUBLE(x) (x)
+#define FIXED_INT(x) ((int)x)
+typedef double fixed;
+#define fixed_zero 0.0
+#define fixed_half 0.5
+#define fixed_one 1.0
+#define fixed_deg_to_rad					0.0174532925199432958
+#define fixed_rad_to_deg					57.2957795131
+#define fixed_pi 3.1415926
+#define fixed_two_pi 2.0*3.1415926
+#define fixed_360 360
+#include <algorithm>
+#define min std::min
+#define max std::max
+
+void sin_cos(const double&theta, double*s, double*c);
+
+#else
+#define FIXED_DOUBLE(x) x.as_double()
+#define FIXED_INT(x) x.as_int()
 
 #include <ostream>
 #include <complex>
+#include <boost/cstdint.hpp>
+#include <climits>
+
+typedef boost::int64_t __int64;
+typedef boost::uint64_t __uint64;
 
 unsigned const fixed_resolution_shift=28;
-__int64 const fixed_resolution=1I64<<fixed_resolution_shift;
+__int64 const fixed_resolution=1<<fixed_resolution_shift; // JMW was LL
 
 class fixed
 {
@@ -28,9 +58,9 @@ public:
     fixed(internal, __int64 nVal):
         m_nVal(nVal)
     {}
-    fixed(__int64 nVal):
-        m_nVal(nVal<<fixed_resolution_shift)
-    {}
+//    fixed(__int64 nVal):
+//        m_nVal(nVal<<fixed_resolution_shift)
+//    {}
     
     fixed(long nVal):
         m_nVal(__int64(nVal)<<fixed_resolution_shift)
@@ -44,10 +74,11 @@ public:
         m_nVal(__int64(nVal)<<fixed_resolution_shift)
     {}
     
+/*    
     fixed(unsigned __int64 nVal):
         m_nVal(nVal<<fixed_resolution_shift)
     {}
-    
+*/  
     fixed(unsigned long nVal):
         m_nVal(__int64(nVal)<<fixed_resolution_shift)
     {}
@@ -107,6 +138,14 @@ public:
     {
         return as_double();
     }
+    inline operator short() const
+    {
+        return as_short();
+    }
+    inline operator unsigned short() const
+    {
+        return as_unsigned_short();
+    }
     float as_float() const
     {
         return m_nVal/(float)fixed_resolution;
@@ -135,11 +174,12 @@ public:
     {
         return (unsigned long)(m_nVal/fixed_resolution);
     }
+/*
     unsigned __int64 as_unsigned_int64() const
     {
         return (unsigned __int64)m_nVal/fixed_resolution;
     }
-
+*/
     unsigned int as_unsigned_int() const
     {
         return (unsigned int)(m_nVal/fixed_resolution);
@@ -194,11 +234,13 @@ public:
     {
         return (*this)*=fixed(val);
     }
+/*
     fixed& operator*=(__int64 val)
     {
         m_nVal*=val;
         return *this;
     }
+*/
     fixed& operator*=(long val)
     {
         m_nVal*=val;
@@ -219,11 +261,13 @@ public:
         m_nVal*=val;
         return *this;
     }
+/*
     fixed& operator*=(unsigned __int64 val)
     {
         m_nVal*=val;
         return *this;
     }
+*/
     fixed& operator*=(unsigned long val)
     {
         m_nVal*=val;
@@ -252,11 +296,13 @@ public:
     {
         return (*this)/=fixed(val);
     }
+/*
     fixed& operator/=(__int64 val)
     {
         m_nVal/=val;
         return *this;
     }
+*/
     fixed& operator/=(long val)
     {
         m_nVal/=val;
@@ -277,11 +323,13 @@ public:
         m_nVal/=val;
         return *this;
     }
+/*
     fixed& operator/=(unsigned __int64 val)
     {
         m_nVal/=val;
         return *this;
     }
+*/
     fixed& operator/=(unsigned long val)
     {
         m_nVal/=val;
@@ -314,6 +362,7 @@ public:
 
     static void sin_cos(fixed const& theta,fixed* s,fixed*c);
     static void to_polar(fixed const& x,fixed const& y,fixed* r,fixed*theta);
+    static fixed atan2(fixed const& y,fixed const& x);
 
     fixed sin() const;
     fixed cos() const;
@@ -1478,6 +1527,26 @@ inline fixed tan(fixed const& x)
     return x.tan();
 }
 
+inline fixed atan(fixed const& x)
+{
+    return x.atan();
+}
+
+inline fixed max(fixed const& x, fixed const& y)
+{
+  return (x>y? x:y);
+}
+
+inline fixed min(fixed const& x, fixed const& y)
+{
+  return (x<y? x:y);
+}
+
+inline fixed atan2(fixed const& y, fixed const& x)
+{
+  return fixed::atan2(y,x);
+}
+
 inline fixed sqrt(fixed const& x)
 {
     return x.sqrt();
@@ -1583,6 +1652,12 @@ inline fixed fixed::modf(fixed*integral_part) const
     return fixed(internal(),fractional_part);
 }
 
+inline void sin_cos(fixed const& theta,fixed* s,fixed*c)
+{
+  ::fixed::sin_cos(theta, s, c);
+}
+
+
 namespace std
 {
     template<>
@@ -1602,13 +1677,18 @@ namespace std
     }
 }
 
-fixed const fixed_max(fixed::internal(),0x7fffffffffffffffI64);
-fixed const fixed_one(fixed::internal(),1I64<<(fixed_resolution_shift));
+fixed const fixed_max(fixed::internal(),0x7fffffffffffffff);
+fixed const fixed_one(fixed::internal(),1<<(fixed_resolution_shift));
 fixed const fixed_zero(fixed::internal(),0);
-fixed const fixed_half(fixed::internal(),1I64<<(fixed_resolution_shift-1));
+fixed const fixed_half(fixed::internal(),1<<(fixed_resolution_shift-1));
 extern fixed const fixed_pi;
 extern fixed const fixed_two_pi;
 extern fixed const fixed_half_pi;
 extern fixed const fixed_quarter_pi;
+extern fixed const fixed_deg_to_rad;
+extern fixed const fixed_rad_to_deg;
+extern fixed const fixed_360;
+extern fixed const fixed_180;
 
+#endif
 #endif
