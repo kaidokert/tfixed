@@ -7,392 +7,508 @@
 //
 // Extensions and bug/compilation fixes by John Wharington 2009
 
+#include "Compiler.h"
+
 #include <algorithm>
+#include "Constants.h"
+#include <assert.h>
 using std::max;
 using std::min;
+
+#ifdef FIXED_MATH
+#define fixed_constant(d, f) fixed(fixed::internal(), (f))
+#else
+#define fixed_constant(d, f) (d)
+#endif
+
+#define fixed_int_constant(i) fixed_constant((double)(i), ((fixed::value_t)(i)) << fixed::resolution_shift)
+
+#define fixed_zero fixed_int_constant(0)
+#define fixed_one fixed_int_constant(1)
+#define fixed_minus_one fixed_int_constant(-1)
+#define fixed_two fixed_int_constant(2)
+#define fixed_four fixed_int_constant(4)
+#define fixed_ten fixed_int_constant(10)
+
+#define fixed_half fixed_constant(0.5, 1 << (fixed::resolution_shift - 1))
+#define fixed_third fixed_constant(1./3., (1 << fixed::resolution_shift) / 3)
+#define fixed_two_thirds fixed_constant(2./3., (2 << (fixed::resolution_shift)) / 3)
+
+#define fixed_deg_to_rad fixed_constant(0.0174532925199432958, 0x477d1bLL)
+#define fixed_rad_to_deg fixed_constant(57.2957795131, 0x394bb834cLL)
+#define fixed_pi fixed_constant(M_PI, 0x3243f6a8LL)
+#define fixed_two_pi fixed_constant(M_2PI, 0x6487ed51LL)
+#define fixed_half_pi fixed_constant(M_HALFPI, 0x1921fb54LL)
+#define fixed_quarter_pi fixed_constant(M_HALFPI/2, 0xc90fdaaLL)
+
+#define fixed_90 fixed_int_constant(90)
+#define fixed_180 fixed_int_constant(180)
+#define fixed_270 fixed_int_constant(270)
+#define fixed_360 fixed_int_constant(360)
+
+#define fixed_sqrt_two fixed_constant(1.4142135623730951, 0x16a09e66LL)
+#define fixed_sqrt_half fixed_constant(0.70710678118654757, 0xb504f33LL)
 
 #ifndef FIXED_MATH
 #include <math.h>
 #define FIXED_DOUBLE(x) (x)
 #define FIXED_INT(x) ((int)x)
 typedef double fixed;
-#define fixed_zero 0.0
-#define fixed_half 0.5
-#define fixed_one 1.0
-#define fixed_two 2.0
-#define fixed_four 4.0
-#define fixed_deg_to_rad					0.0174532925199432958
-#define fixed_rad_to_deg					57.2957795131
-#define fixed_pi 3.1415926
-#define fixed_two_pi 2.0*3.1415926
-#define fixed_360 360
-#define fixed_180 180
 
 void sin_cos(const double&theta, double*s, double*c);
 #define positive(x) (x>0)
 #define negative(x) (x<0)
+#define sigmoid(x) (2.0 / (1.0 + exp(-x)) - 1.0)
+
+gcc_const
+static inline fixed
+half(fixed a)
+{
+  return a * 0.5;
+}
+
+gcc_const
+inline fixed rsqrt(fixed a) {
+  // not fast
+  return 1.0/sqrt(a);
+}
+
+gcc_const
+inline fixed fast_sqrt(fixed a) {
+  // not fast
+  return sqrt(a);
+}
+
+gcc_const
+inline fixed sqr(fixed a) {
+  return a*a;
+}
+
+gcc_const
+inline fixed fast_mult(fixed a, int a_bits, fixed b, int b_bits)
+{
+  return a * b;
+}
+
+gcc_const
+inline fixed fast_mult(fixed a, fixed b, int b_bits)
+{
+  return a * b;
+}
+
+gcc_const
+inline fixed accurate_half_sin(fixed a) {
+  return sin(a/2);
+}
 
 #else
 #define FIXED_DOUBLE(x) x.as_double()
 #define FIXED_INT(x) x.as_int()
 
-#include <ostream>
 #include <complex>
 #include <climits>
 
 #ifdef HAVE_BOOST
 #include <boost/cstdint.hpp>
-typedef boost::int64_t __int64;
-typedef boost::uint64_t __uint64;
 #else
 #include <stdint.h>
-typedef unsigned __int64    __uint64;
 #endif
-
-unsigned const fixed_resolution_shift=28;
-__int64 const fixed_resolution=1<<fixed_resolution_shift; // JMW was LL
 
 class fixed
 {
+#ifdef HAVE_BOOST
+  typedef boost::int64_t int64_t;
+  typedef boost::uint64_t uint64_t;
+#endif
+  typedef uint64_t uvalue_t;
+
+public:
+  typedef int64_t value_t;
+
+  static const unsigned resolution_shift = 28;
+  static const value_t resolution = 1 << resolution_shift;
+  static const unsigned accurate_cordic_shift = 11;
+
 private:
-    __int64 m_nVal;
+    value_t m_nVal;
 
 public:
 
-    struct internal
-    {};
+  struct internal {};
 
-    fixed():
-        m_nVal(0)
-    {}
+  fixed() {}
     
-    fixed(internal, __int64 nVal):
-        m_nVal(nVal)
-    {}
-//    fixed(__int64 nVal):
-//        m_nVal(nVal<<fixed_resolution_shift)
+  fixed(internal, value_t nVal)
+    :m_nVal(nVal) {}
+
+//    fixed(value_t nVal):
+//        m_nVal(nVal<<resolution_shift)
 //    {}
     
-    fixed(long nVal):
-        m_nVal((__int64)(nVal)<<fixed_resolution_shift)
-    {}
+  explicit fixed(long nVal)
+    :m_nVal((value_t)(nVal)<<resolution_shift) {}
     
-    fixed(int nVal):
-        m_nVal((__int64)(nVal)<<fixed_resolution_shift)
-    {}
+  explicit fixed(int nVal)
+    :m_nVal((value_t)(nVal)<<resolution_shift) {}
     
-    fixed(short nVal):
-        m_nVal((__int64)(nVal)<<fixed_resolution_shift)
-    {}
+  explicit fixed(short nVal)
+    :m_nVal((value_t)(nVal)<<resolution_shift) {}
     
 /*    
-    fixed(unsigned __int64 nVal):
-        m_nVal(nVal<<fixed_resolution_shift)
+    fixed(unsigned value_t nVal):
+        m_nVal(nVal<<resolution_shift)
     {}
 */  
-    fixed(unsigned long nVal):
-        m_nVal((__int64)(nVal)<<fixed_resolution_shift)
-    {}
-    fixed(unsigned int nVal):
-        m_nVal((__int64)(nVal)<<fixed_resolution_shift)
-    {}
-    fixed(unsigned short nVal):
-        m_nVal((__int64)(nVal)<<fixed_resolution_shift)
-    {}
-    fixed(double nVal):
-        m_nVal(static_cast<__int64>(nVal*static_cast<double>(fixed_resolution)))
-    {}
-    fixed(float nVal):
-        m_nVal(static_cast<__int64>(nVal*static_cast<float>(fixed_resolution)))
-    {}
+  explicit fixed(unsigned long nVal)
+    :m_nVal((value_t)(nVal)<<resolution_shift) {}
+  explicit fixed(unsigned int nVal)
+    :m_nVal((value_t)(nVal)<<resolution_shift) {}
+  explicit fixed(unsigned short nVal)
+    :m_nVal((value_t)(nVal)<<resolution_shift) {}
+  explicit fixed(double nVal)
+    :m_nVal(static_cast<value_t>(nVal*static_cast<double>(resolution))) {}
+  explicit fixed(float nVal)
+    :m_nVal(static_cast<value_t>(nVal*static_cast<float>(resolution))) {}
 
-    template<typename T>
-    fixed& operator=(T other)
-    {
-        m_nVal=fixed(other).m_nVal;
-        return *this;
-    }
-    fixed& operator=(fixed const& other)
-    {
-        m_nVal=other.m_nVal;
-        return *this;
-    }
-    friend bool operator==(fixed const& lhs,fixed const& rhs)
-    {
+  gcc_pure
+  friend bool operator==(fixed const& lhs,fixed const& rhs) {
         return lhs.m_nVal==rhs.m_nVal;
     }
-    friend bool operator!=(fixed const& lhs,fixed const& rhs)
-    {
+
+  gcc_pure
+  friend bool operator!=(fixed const& lhs,fixed const& rhs) {
         return lhs.m_nVal!=rhs.m_nVal;
     }
-    friend bool operator<(fixed const& lhs,fixed const& rhs)
-    {
+
+  gcc_pure
+  friend bool operator<(fixed const& lhs,fixed const& rhs) {
         return lhs.m_nVal<rhs.m_nVal;
     }
-    friend bool operator>(fixed const& lhs,fixed const& rhs)
-    {
+
+  gcc_pure
+  friend bool operator>(fixed const& lhs,fixed const& rhs) {
         return lhs.m_nVal>rhs.m_nVal;
     }
-    friend bool operator<=(fixed const& lhs,fixed const& rhs)
-    {
+
+  gcc_pure
+  friend bool operator<=(fixed const& lhs,fixed const& rhs) {
         return lhs.m_nVal<=rhs.m_nVal;
     }
-    friend bool operator>=(fixed const& lhs,fixed const& rhs)
-    {
+
+  gcc_pure
+  friend bool operator>=(fixed const& lhs,fixed const& rhs) {
         return lhs.m_nVal>=rhs.m_nVal;
     }
-    operator bool() const
-    {
-        return m_nVal?true:false;
+
+  gcc_pure
+  operator bool() const {
+    return m_nVal != 0;
     }
-    inline operator double() const
-    {
+
+  gcc_pure
+  inline operator double() const {
         return as_double();
     }
-    inline operator short() const
-    {
+
+  gcc_pure
+  inline operator short() const {
         return as_short();
     }
-    inline operator int() const
-    {
+
+  gcc_pure
+  inline operator int() const {
         return as_int();
     }
-    inline operator unsigned short() const
-    {
+
+  gcc_pure
+  inline operator unsigned() const {
+    return (unsigned)as_int();
+  }
+
+  gcc_pure
+  inline operator unsigned short() const {
         return as_unsigned_short();
     }
-    float as_float() const
-    {
-        return m_nVal/(float)fixed_resolution;
+
+  gcc_pure
+  inline operator long() const {
+    return as_long();
     }
 
-    double as_double() const
-    {
-        return m_nVal/(double)fixed_resolution;
+  gcc_pure
+  float as_float() const {
+    return m_nVal/(float)resolution;
     }
 
-    long as_long() const
-    {
-        return (long)(m_nVal/fixed_resolution);
-    }
-    __int64 as_int64() const
-    {
-        return m_nVal/fixed_resolution;
+  gcc_pure
+  double as_double() const {
+    return m_nVal/(double)resolution;
     }
 
-    int as_int() const
-    {
-        return (int)(m_nVal/fixed_resolution);
+  gcc_pure
+  long as_long() const {
+    return (long)(m_nVal >> resolution_shift);
     }
 
-    unsigned long as_unsigned_long() const
-    {
-        return (unsigned long)(m_nVal/fixed_resolution);
+  gcc_pure
+  int64_t as_int64() const {
+    return m_nVal >> resolution_shift;
     }
+
+  gcc_pure
+  int as_int() const {
+    return (int)(m_nVal >> resolution_shift);
+  }
+
+  gcc_pure
+  unsigned long as_unsigned_long() const {
+    return (unsigned long)(m_nVal >> resolution_shift);
+    }
+
 /*
-    unsigned __int64 as_unsigned_int64() const
-    {
-        return (unsigned __int64)m_nVal/fixed_resolution;
+  uint64_t as_unsigned_int64() const {
+    return (uint64_t)(m_nVal >> resolution_shift);
     }
 */
-    unsigned int as_unsigned_int() const
-    {
-        return (unsigned int)(m_nVal/fixed_resolution);
+
+  gcc_pure
+  unsigned int as_unsigned_int() const {
+    return (unsigned int)(m_nVal >> resolution_shift);
     }
 
-    short as_short() const
-    {
-        return (short)(m_nVal/fixed_resolution);
+  gcc_pure
+  short as_short() const {
+    return (short)(m_nVal >> resolution_shift);
     }
 
-    unsigned short as_unsigned_short() const
-    {
-        return (unsigned short)(m_nVal/fixed_resolution);
+  gcc_pure
+  unsigned short as_unsigned_short() const {
+    return (unsigned short)(m_nVal >> resolution_shift);
     }
 
-    fixed operator++()
-    {
-        m_nVal += fixed_resolution;
+  fixed operator++() {
+    m_nVal += resolution;
         return *this;
     }
 
-    fixed operator--()
-    {
-        m_nVal -= fixed_resolution;
+  fixed operator--() {
+    m_nVal -= resolution;
         return *this;
     }
 
+  gcc_pure
   bool positive() const;
+
+  gcc_pure
   bool negative() const;
 
+  gcc_pure
+  fixed half() const {
+    return fixed(internal(), m_nVal >> 1);
+  }
+
+  gcc_pure
+  fixed trunc() const {
+    value_t x = m_nVal;
+    if (x < 0)
+      x += resolution - 1;
+    return fixed(fixed::internal(),
+                 x & ((int64_t)-1 << resolution_shift));
+  }
+
+  gcc_pure
     fixed floor() const;
+
+  gcc_pure
     fixed ceil() const;
+
+  gcc_pure
     fixed sqrt() const;
+
+  gcc_pure
+  fixed fast_sqrt() const;
+
+  gcc_pure
+  fixed sqr() const;
+
+  gcc_pure
+  fixed rsqrt() const;
+
+  gcc_pure
     fixed exp() const;
+
+  gcc_pure
     fixed log() const;
+
     fixed& operator%=(fixed const& other);
     fixed& operator*=(fixed const& val);
-    fixed& operator/=(fixed const& val);
-    fixed& operator-=(fixed const& val)
-    {
+  fixed& operator/=(fixed const divisor);
+  fixed& operator-=(fixed const& val) {
         m_nVal -= val.m_nVal;
         return *this;
     }
 
-    fixed& operator+=(fixed const& val)
-    {
+  fixed& operator+=(fixed const& val) {
         m_nVal += val.m_nVal;
         return *this;
     }
-    fixed& operator*=(double val)
-    {
-        return (*this)*=fixed(val);
-    }
-    fixed& operator*=(float val)
-    {
-        return (*this)*=fixed(val);
-    }
+
 /*
-    fixed& operator*=(__int64 val)
+    fixed& operator*=(value_t val)
     {
         m_nVal*=val;
         return *this;
     }
 */
-    fixed& operator*=(long val)
-    {
+
+  fixed& operator*=(long val) {
         m_nVal*=val;
         return *this;
     }
-    fixed& operator*=(int val)
-    {
+
+  fixed& operator*=(int val) {
         m_nVal*=val;
         return *this;
     }
-    fixed& operator*=(short val)
-    {
+
+  fixed& operator*=(short val) {
         m_nVal*=val;
         return *this;
     }
-    fixed& operator*=(char val)
-    {
+
+  fixed& operator*=(char val) {
         m_nVal*=val;
         return *this;
     }
+
 /*
-    fixed& operator*=(unsigned __int64 val)
+    fixed& operator*=(unsigned value_t val)
     {
         m_nVal*=val;
         return *this;
     }
 */
-    fixed& operator*=(unsigned long val)
-    {
+
+  fixed& operator*=(unsigned long val) {
         m_nVal*=val;
         return *this;
     }
-    fixed& operator*=(unsigned int val)
-    {
+
+  fixed& operator*=(unsigned int val) {
         m_nVal*=val;
         return *this;
     }
-    fixed& operator*=(unsigned short val)
-    {
+
+  fixed& operator*=(unsigned short val) {
         m_nVal*=val;
         return *this;
     }
-    fixed& operator*=(unsigned char val)
-    {
+
+  fixed& operator*=(unsigned char val) {
         m_nVal*=val;
         return *this;
     }
-    fixed& operator/=(double val)
-    {
-        return (*this)/=fixed(val);
+
+  gcc_const
+  static fixed fast_mult(fixed a, int a_shift, fixed b, int b_shift) {
+    return fixed(internal(),
+                 ((a.m_nVal >> a_shift) * (b.m_nVal >> b_shift))
+                 >> (resolution_shift - a_shift - b_shift));
     }
-    fixed& operator/=(float val)
-    {
-        return (*this)/=fixed(val);
-    }
+
 /*
-    fixed& operator/=(__int64 val)
+    fixed& operator/=(value_t val)
     {
         m_nVal/=val;
         return *this;
     }
 */
-    fixed& operator/=(long val)
-    {
+
+  fixed& operator/=(long val) {
         m_nVal/=val;
         return *this;
     }
-    fixed& operator/=(int val)
-    {
+
+  fixed& operator/=(int val) {
         m_nVal/=val;
         return *this;
     }
-    fixed& operator/=(short val)
-    {
+
+  fixed& operator/=(short val) {
         m_nVal/=val;
         return *this;
     }
-    fixed& operator/=(char val)
-    {
+
+  fixed& operator/=(char val) {
         m_nVal/=val;
         return *this;
     }
+
 /*
-    fixed& operator/=(unsigned __int64 val)
+    fixed& operator/=(unsigned value_t val)
     {
         m_nVal/=val;
         return *this;
     }
 */
-    fixed& operator/=(unsigned long val)
-    {
+
+  fixed& operator/=(unsigned long val) {
         m_nVal/=val;
         return *this;
     }
-    fixed& operator/=(unsigned int val)
-    {
+
+  fixed& operator/=(unsigned int val) {
         m_nVal/=val;
         return *this;
     }
-    fixed& operator/=(unsigned short val)
-    {
+
+  fixed& operator/=(unsigned short val) {
         m_nVal/=val;
         return *this;
     }
-    fixed& operator/=(unsigned char val)
-    {
+
+  fixed& operator/=(unsigned char val) {
         m_nVal/=val;
         return *this;
     }
     
-
-    bool operator!() const
-    {
+  bool operator!() const {
         return m_nVal==0;
     }
     
+  gcc_pure
     fixed modf(fixed* integral_part) const;
+
+  gcc_pure
     fixed atan() const;
 
     static void sin_cos(fixed const& theta,fixed* s,fixed*c);
     static void to_polar(fixed const& x,fixed const& y,fixed* r,fixed*theta);
+
+  gcc_pure
     static fixed atan2(fixed const& y,fixed const& x);
 
+  gcc_pure
+  static fixed sigmoid(fixed const& x);
+
+  gcc_pure
     fixed sin() const;
+
+  gcc_pure
     fixed cos() const;
+
+  gcc_pure
     fixed tan() const;
+
+  gcc_pure
+  fixed accurate_half_sin() const;
+
+  gcc_pure
     fixed operator-() const;
+
+  gcc_pure
     fixed abs() const;
 };
-
-inline std::ostream& operator<<(std::ostream& os,fixed const& value)
-{
-    return os<<value.as_double();
-}
 
 inline bool fixed::positive() const
 {
@@ -404,1190 +520,322 @@ inline bool fixed::negative() const
   return (m_nVal<0);
 }
 
-inline fixed operator-(double a, fixed const& b)
-{
-    fixed temp(a);
-    return temp-=b;
-}
-
-
-inline fixed operator-(float a, fixed const& b)
-{
-    fixed temp(a);
-    return temp-=b;
-}
-
-inline fixed operator-(unsigned long a, fixed const& b)
-{
-    fixed temp(a);
-    return temp-=b;
-}
-
-inline fixed operator-(long a, fixed const& b)
-{
-    fixed temp(a);
-    return temp-=b;
-}
-
-inline fixed operator-(unsigned a, fixed const& b)
-{
-    fixed temp(a);
-    return temp-=b;
-}
-
-inline fixed operator-(int a, fixed const& b)
-{
-    fixed temp(a);
-    return temp-=b;
-}
-
-inline fixed operator-(unsigned short a, fixed const& b)
-{
-    fixed temp(a);
-    return temp-=b;
-}
-
-inline fixed operator-(short a, fixed const& b)
-{
-    fixed temp(a);
-    return temp-=b;
-}
-
-inline fixed operator-(unsigned char a, fixed const& b)
-{
-    fixed temp(a);
-    return temp-=b;
-}
-
-inline fixed operator-(char a, fixed const& b)
-{
-    fixed temp(a);
-    return temp-=b;
-}
-
-inline fixed operator-(fixed const& a,double b)
-{
-    fixed temp(a);
-    return temp-=b;
-}
-
-
-inline fixed operator-(fixed const& a,float b)
-{
-    fixed temp(a);
-    return temp-=b;
-}
-
-inline fixed operator-(fixed const& a,unsigned long b)
-{
-    fixed temp(a);
-    return temp-=b;
-}
-
-inline fixed operator-(fixed const& a,long b)
-{
-    fixed temp(a);
-    return temp-=b;
-}
-
-inline fixed operator-(fixed const& a,unsigned b)
-{
-    fixed temp(a);
-    return temp-=b;
-}
-
-inline fixed operator-(fixed const& a,int b)
-{
-    fixed temp(a);
-    return temp-=b;
-}
-
-inline fixed operator-(fixed const& a,unsigned short b)
-{
-    fixed temp(a);
-    return temp-=b;
-}
-
-inline fixed operator-(fixed const& a,short b)
-{
-    fixed temp(a);
-    return temp-=b;
-}
-
-inline fixed operator-(fixed const& a,unsigned char b)
-{
-    fixed temp(a);
-    return temp-=b;
-}
-
-inline fixed operator-(fixed const& a,char b)
-{
-    fixed temp(a);
-    return temp-=b;
-}
-
+gcc_pure
 inline fixed operator-(fixed const& a,fixed const& b)
 {
     fixed temp(a);
     return temp-=b;
 }
 
-inline fixed operator%(double a, fixed const& b)
-{
-    fixed temp(a);
-    return temp%=b;
-}
-
-
-inline fixed operator%(float a, fixed const& b)
-{
-    fixed temp(a);
-    return temp%=b;
-}
-
-inline fixed operator%(unsigned long a, fixed const& b)
-{
-    fixed temp(a);
-    return temp%=b;
-}
-
-inline fixed operator%(long a, fixed const& b)
-{
-    fixed temp(a);
-    return temp%=b;
-}
-
-inline fixed operator%(unsigned a, fixed const& b)
-{
-    fixed temp(a);
-    return temp%=b;
-}
-
-inline fixed operator%(int a, fixed const& b)
-{
-    fixed temp(a);
-    return temp%=b;
-}
-
-inline fixed operator%(unsigned short a, fixed const& b)
-{
-    fixed temp(a);
-    return temp%=b;
-}
-
-inline fixed operator%(short a, fixed const& b)
-{
-    fixed temp(a);
-    return temp%=b;
-}
-
-inline fixed operator%(unsigned char a, fixed const& b)
-{
-    fixed temp(a);
-    return temp%=b;
-}
-
-inline fixed operator%(char a, fixed const& b)
-{
-    fixed temp(a);
-    return temp%=b;
-}
-
-inline fixed operator%(fixed const& a,double b)
-{
-    fixed temp(a);
-    return temp%=b;
-}
-
-
-inline fixed operator%(fixed const& a,float b)
-{
-    fixed temp(a);
-    return temp%=b;
-}
-
-inline fixed operator%(fixed const& a,unsigned long b)
-{
-    fixed temp(a);
-    return temp%=b;
-}
-
-inline fixed operator%(fixed const& a,long b)
-{
-    fixed temp(a);
-    return temp%=b;
-}
-
-inline fixed operator%(fixed const& a,unsigned b)
-{
-    fixed temp(a);
-    return temp%=b;
-}
-
-inline fixed operator%(fixed const& a,int b)
-{
-    fixed temp(a);
-    return temp%=b;
-}
-
-inline fixed operator%(fixed const& a,unsigned short b)
-{
-    fixed temp(a);
-    return temp%=b;
-}
-
-inline fixed operator%(fixed const& a,short b)
-{
-    fixed temp(a);
-    return temp%=b;
-}
-
-inline fixed operator%(fixed const& a,unsigned char b)
-{
-    fixed temp(a);
-    return temp%=b;
-}
-
-inline fixed operator%(fixed const& a,char b)
-{
-    fixed temp(a);
-    return temp%=b;
-}
-
+gcc_pure
 inline fixed operator%(fixed const& a,fixed const& b)
 {
     fixed temp(a);
-    return temp%=b;
+  return temp%=b;
 }
 
-inline fixed operator+(double a, fixed const& b)
-{
-    fixed temp(a);
-    return temp+=b;
-}
-
-
-inline fixed operator+(float a, fixed const& b)
-{
-    fixed temp(a);
-    return temp+=b;
-}
-
-inline fixed operator+(unsigned long a, fixed const& b)
-{
-    fixed temp(a);
-    return temp+=b;
-}
-
-inline fixed operator+(long a, fixed const& b)
-{
-    fixed temp(a);
-    return temp+=b;
-}
-
-inline fixed operator+(unsigned a, fixed const& b)
-{
-    fixed temp(a);
-    return temp+=b;
-}
-
-inline fixed operator+(int a, fixed const& b)
-{
-    fixed temp(a);
-    return temp+=b;
-}
-
-inline fixed operator+(unsigned short a, fixed const& b)
-{
-    fixed temp(a);
-    return temp+=b;
-}
-
-inline fixed operator+(short a, fixed const& b)
-{
-    fixed temp(a);
-    return temp+=b;
-}
-
-inline fixed operator+(unsigned char a, fixed const& b)
-{
-    fixed temp(a);
-    return temp+=b;
-}
-
-inline fixed operator+(char a, fixed const& b)
-{
-    fixed temp(a);
-    return temp+=b;
-}
-
-inline fixed operator+(fixed const& a,double b)
-{
-    fixed temp(a);
-    return temp+=b;
-}
-
-
-inline fixed operator+(fixed const& a,float b)
-{
-    fixed temp(a);
-    return temp+=b;
-}
-
-inline fixed operator+(fixed const& a,unsigned long b)
-{
-    fixed temp(a);
-    return temp+=b;
-}
-
-inline fixed operator+(fixed const& a,long b)
-{
-    fixed temp(a);
-    return temp+=b;
-}
-
-inline fixed operator+(fixed const& a,unsigned b)
-{
-    fixed temp(a);
-    return temp+=b;
-}
-
-inline fixed operator+(fixed const& a,int b)
-{
-    fixed temp(a);
-    return temp+=b;
-}
-
-inline fixed operator+(fixed const& a,unsigned short b)
-{
-    fixed temp(a);
-    return temp+=b;
-}
-
-inline fixed operator+(fixed const& a,short b)
-{
-    fixed temp(a);
-    return temp+=b;
-}
-
-inline fixed operator+(fixed const& a,unsigned char b)
-{
-    fixed temp(a);
-    return temp+=b;
-}
-
-inline fixed operator+(fixed const& a,char b)
-{
-    fixed temp(a);
-    return temp+=b;
-}
-
+gcc_pure
 inline fixed operator+(fixed const& a,fixed const& b)
 {
     fixed temp(a);
-    return temp+=b;
+  return temp+=b;
 }
 
-inline fixed operator*(double a, fixed const& b)
-{
-    fixed temp(b);
-    return temp*=a;
-}
-
-
-inline fixed operator*(float a, fixed const& b)
-{
-    fixed temp(b);
-    return temp*=a;
-}
-
+gcc_pure
 inline fixed operator*(unsigned long a, fixed const& b)
 {
-    fixed temp(b);
-    return temp*=a;
+  fixed temp(b);
+  return temp*=a;
 }
 
+gcc_pure
 inline fixed operator*(long a, fixed const& b)
 {
-    fixed temp(b);
-    return temp*=a;
+  fixed temp(b);
+  return temp*=a;
 }
 
+gcc_pure
 inline fixed operator*(unsigned a, fixed const& b)
 {
-    fixed temp(b);
-    return temp*=a;
+  fixed temp(b);
+  return temp*=a;
 }
 
+gcc_pure
 inline fixed operator*(int a, fixed const& b)
 {
-    fixed temp(b);
-    return temp*=a;
+  fixed temp(b);
+  return temp*=a;
 }
 
+gcc_pure
 inline fixed operator*(unsigned short a, fixed const& b)
 {
-    fixed temp(b);
-    return temp*=a;
+  fixed temp(b);
+  return temp*=a;
 }
 
+gcc_pure
 inline fixed operator*(short a, fixed const& b)
 {
-    fixed temp(b);
-    return temp*=a;
+  fixed temp(b);
+  return temp*=a;
 }
 
+gcc_pure
 inline fixed operator*(unsigned char a, fixed const& b)
 {
-    fixed temp(b);
-    return temp*=a;
+  fixed temp(b);
+  return temp*=a;
 }
 
+gcc_pure
 inline fixed operator*(char a, fixed const& b)
 {
-    fixed temp(b);
-    return temp*=a;
+  fixed temp(b);
+  return temp*=a;
 }
 
-inline fixed operator*(fixed const& a,double b)
-{
-    fixed temp(a);
-    return temp*=b;
-}
-
-
-inline fixed operator*(fixed const& a,float b)
-{
-    fixed temp(a);
-    return temp*=b;
-}
-
+gcc_pure
 inline fixed operator*(fixed const& a,unsigned long b)
 {
     fixed temp(a);
-    return temp*=b;
+  return temp *= b;
 }
 
+gcc_pure
 inline fixed operator*(fixed const& a,long b)
 {
     fixed temp(a);
-    return temp*=b;
+  return temp *= b;
 }
 
+gcc_pure
 inline fixed operator*(fixed const& a,unsigned b)
 {
     fixed temp(a);
-    return temp*=b;
+  return temp *= b;
 }
 
+gcc_pure
 inline fixed operator*(fixed const& a,int b)
 {
     fixed temp(a);
-    return temp*=b;
+  return temp *= b;
 }
 
+gcc_pure
 inline fixed operator*(fixed const& a,unsigned short b)
 {
     fixed temp(a);
-    return temp*=b;
+  return temp *= b;
 }
 
+gcc_pure
 inline fixed operator*(fixed const& a,short b)
 {
     fixed temp(a);
-    return temp*=b;
+  return temp *= b;
 }
 
+gcc_pure
 inline fixed operator*(fixed const& a,unsigned char b)
 {
     fixed temp(a);
-    return temp*=b;
+  return temp *= b;
 }
 
+gcc_pure
 inline fixed operator*(fixed const& a,char b)
 {
     fixed temp(a);
-    return temp*=b;
+  return temp *= b;
 }
 
+gcc_pure
 inline fixed operator*(fixed const& a,fixed const& b)
 {
     fixed temp(a);
-    return temp*=b;
+  return temp*=b;
 }
 
-inline fixed operator/(double a, fixed const& b)
+/**
+ * Simplified and faster multiplication when you know the range of
+ * the coefficients at compile time.
+ *
+ * @param a first coefficient
+ * @param a_shift number of bits to discard from the first coefficient
+ * @param b second coefficient
+ * @param b_shift number of bits to discard from the second coefficient
+ */
+gcc_const
+inline fixed
+fast_mult(fixed a, int a_shift, fixed b, int b_shift)
 {
-    fixed temp(a);
-    return temp/=b;
+  return fixed::fast_mult(a, a_shift, b, b_shift);
 }
 
-
-inline fixed operator/(float a, fixed const& b)
+gcc_const
+inline fixed fast_mult(fixed a, fixed b, int b_bits)
 {
-    fixed temp(a);
-    return temp/=b;
+  return fixed::fast_mult(a, 0, b, b_bits);
 }
 
-inline fixed operator/(unsigned long a, fixed const& b)
-{
-    fixed temp(a);
-    return temp/=b;
-}
-
-inline fixed operator/(long a, fixed const& b)
-{
-    fixed temp(a);
-    return temp/=b;
-}
-
-inline fixed operator/(unsigned a, fixed const& b)
-{
-    fixed temp(a);
-    return temp/=b;
-}
-
-inline fixed operator/(int a, fixed const& b)
-{
-    fixed temp(a);
-    return temp/=b;
-}
-
-inline fixed operator/(unsigned short a, fixed const& b)
-{
-    fixed temp(a);
-    return temp/=b;
-}
-
-inline fixed operator/(short a, fixed const& b)
-{
-    fixed temp(a);
-    return temp/=b;
-}
-
-inline fixed operator/(unsigned char a, fixed const& b)
-{
-    fixed temp(a);
-    return temp/=b;
-}
-
-inline fixed operator/(char a, fixed const& b)
-{
-    fixed temp(a);
-    return temp/=b;
-}
-
-inline fixed operator/(fixed const& a,double b)
-{
-    fixed temp(a);
-    return temp/=b;
-}
-
-
-inline fixed operator/(fixed const& a,float b)
-{
-    fixed temp(a);
-    return temp/=b;
-}
-
+gcc_pure
 inline fixed operator/(fixed const& a,unsigned long b)
 {
     fixed temp(a);
-    return temp/=b;
+  return temp /= b;
 }
 
+gcc_pure
 inline fixed operator/(fixed const& a,long b)
 {
     fixed temp(a);
-    return temp/=b;
+  return temp /= b;
 }
 
+gcc_pure
 inline fixed operator/(fixed const& a,unsigned b)
 {
     fixed temp(a);
-    return temp/=b;
+  return temp /= b;
 }
 
+gcc_pure
 inline fixed operator/(fixed const& a,int b)
 {
     fixed temp(a);
-    return temp/=b;
+  return temp /= b;
 }
 
+gcc_pure
 inline fixed operator/(fixed const& a,unsigned short b)
 {
-    fixed temp(a);
-    return temp/=b;
+  fixed temp(a);
+  return temp /= b;
 }
 
+gcc_pure
 inline fixed operator/(fixed const& a,short b)
 {
-    fixed temp(a);
-    return temp/=b;
+  fixed temp(a);
+  return temp /= b;
 }
 
+gcc_pure
 inline fixed operator/(fixed const& a,unsigned char b)
 {
-    fixed temp(a);
-    return temp/=b;
+  fixed temp(a);
+  return temp /= b;
 }
 
+gcc_pure
 inline fixed operator/(fixed const& a,char b)
 {
-    fixed temp(a);
-    return temp/=b;
+  fixed temp(a);
+  return temp /= b;
 }
 
+gcc_pure
 inline fixed operator/(fixed const& a,fixed const& b)
 {
-    fixed temp(a);
-    return temp/=b;
+  fixed temp(a);
+  return temp/=b;
 }
 
-inline bool operator==(double a, fixed const& b)
+gcc_pure
+static inline fixed pow(fixed x, fixed y)
 {
-    return fixed(a)==b;
-}
-inline bool operator==(float a, fixed const& b)
-{
-    return fixed(a)==b;
-}
-
-inline bool operator==(unsigned long a, fixed const& b)
-{
-    return fixed(a)==b;
-}
-inline bool operator==(long a, fixed const& b)
-{
-    return fixed(a)==b;
-}
-inline bool operator==(unsigned a, fixed const& b)
-{
-    return fixed(a)==b;
-}
-inline bool operator==(int a, fixed const& b)
-{
-    return fixed(a)==b;
-}
-inline bool operator==(unsigned short a, fixed const& b)
-{
-    return fixed(a)==b;
-}
-inline bool operator==(short a, fixed const& b)
-{
-    return fixed(a)==b;
-}
-inline bool operator==(unsigned char a, fixed const& b)
-{
-    return fixed(a)==b;
-}
-inline bool operator==(char a, fixed const& b)
-{
-    return fixed(a)==b;
-}
-
-inline bool operator==(fixed const& a,double b)
-{
-    return a==fixed(b);
-}
-inline bool operator==(fixed const& a,float b)
-{
-    return a==fixed(b);
-}
-inline bool operator==(fixed const& a,unsigned long b)
-{
-    return a==fixed(b);
-}
-inline bool operator==(fixed const& a,long b)
-{
-    return a==fixed(b);
-}
-inline bool operator==(fixed const& a,unsigned b)
-{
-    return a==fixed(b);
-}
-inline bool operator==(fixed const& a,int b)
-{
-    return a==fixed(b);
-}
-inline bool operator==(fixed const& a,unsigned short b)
-{
-    return a==fixed(b);
-}
-inline bool operator==(fixed const& a,short b)
-{
-    return a==fixed(b);
-}
-inline bool operator==(fixed const& a,unsigned char b)
-{
-    return a==fixed(b);
-}
-inline bool operator==(fixed const& a,char b)
-{
-    return a==fixed(b);
-}
-
-inline bool operator!=(double a, fixed const& b)
-{
-    return fixed(a)!=b;
-}
-inline bool operator!=(float a, fixed const& b)
-{
-    return fixed(a)!=b;
-}
-
-inline bool operator!=(unsigned long a, fixed const& b)
-{
-    return fixed(a)!=b;
-}
-inline bool operator!=(long a, fixed const& b)
-{
-    return fixed(a)!=b;
-}
-inline bool operator!=(unsigned a, fixed const& b)
-{
-    return fixed(a)!=b;
-}
-inline bool operator!=(int a, fixed const& b)
-{
-    return fixed(a)!=b;
-}
-inline bool operator!=(unsigned short a, fixed const& b)
-{
-    return fixed(a)!=b;
-}
-inline bool operator!=(short a, fixed const& b)
-{
-    return fixed(a)!=b;
-}
-inline bool operator!=(unsigned char a, fixed const& b)
-{
-    return fixed(a)!=b;
-}
-inline bool operator!=(char a, fixed const& b)
-{
-    return fixed(a)!=b;
-}
-
-inline bool operator!=(fixed const& a,double b)
-{
-    return a!=fixed(b);
-}
-inline bool operator!=(fixed const& a,float b)
-{
-    return a!=fixed(b);
-}
-inline bool operator!=(fixed const& a,unsigned long b)
-{
-    return a!=fixed(b);
-}
-inline bool operator!=(fixed const& a,long b)
-{
-    return a!=fixed(b);
-}
-inline bool operator!=(fixed const& a,unsigned b)
-{
-    return a!=fixed(b);
-}
-inline bool operator!=(fixed const& a,int b)
-{
-    return a!=fixed(b);
-}
-inline bool operator!=(fixed const& a,unsigned short b)
-{
-    return a!=fixed(b);
-}
-inline bool operator!=(fixed const& a,short b)
-{
-    return a!=fixed(b);
-}
-inline bool operator!=(fixed const& a,unsigned char b)
-{
-    return a!=fixed(b);
-}
-inline bool operator!=(fixed const& a,char b)
-{
-    return a!=fixed(b);
-}
-
-inline bool operator<(double a, fixed const& b)
-{
-    return fixed(a)<b;
-}
-inline bool operator<(float a, fixed const& b)
-{
-    return fixed(a)<b;
-}
-
-inline bool operator<(unsigned long a, fixed const& b)
-{
-    return fixed(a)<b;
-}
-inline bool operator<(long a, fixed const& b)
-{
-    return fixed(a)<b;
-}
-inline bool operator<(unsigned a, fixed const& b)
-{
-    return fixed(a)<b;
-}
-inline bool operator<(int a, fixed const& b)
-{
-    return fixed(a)<b;
-}
-inline bool operator<(unsigned short a, fixed const& b)
-{
-    return fixed(a)<b;
-}
-inline bool operator<(short a, fixed const& b)
-{
-    return fixed(a)<b;
-}
-inline bool operator<(unsigned char a, fixed const& b)
-{
-    return fixed(a)<b;
-}
-inline bool operator<(char a, fixed const& b)
-{
-    return fixed(a)<b;
-}
-
-inline bool operator<(fixed const& a,double b)
-{
-    return a<fixed(b);
-}
-inline bool operator<(fixed const& a,float b)
-{
-    return a<fixed(b);
-}
-inline bool operator<(fixed const& a,unsigned long b)
-{
-    return a<fixed(b);
-}
-inline bool operator<(fixed const& a,long b)
-{
-    return a<fixed(b);
-}
-inline bool operator<(fixed const& a,unsigned b)
-{
-    return a<fixed(b);
-}
-inline bool operator<(fixed const& a,int b)
-{
-    return a<fixed(b);
-}
-inline bool operator<(fixed const& a,unsigned short b)
-{
-    return a<fixed(b);
-}
-inline bool operator<(fixed const& a,short b)
-{
-    return a<fixed(b);
-}
-inline bool operator<(fixed const& a,unsigned char b)
-{
-    return a<fixed(b);
-}
-inline bool operator<(fixed const& a,char b)
-{
-    return a<fixed(b);
-}
-
-inline bool operator>(double a, fixed const& b)
-{
-    return fixed(a)>b;
-}
-inline bool operator>(float a, fixed const& b)
-{
-    return fixed(a)>b;
-}
-
-inline bool operator>(unsigned long a, fixed const& b)
-{
-    return fixed(a)>b;
-}
-inline bool operator>(long a, fixed const& b)
-{
-    return fixed(a)>b;
-}
-inline bool operator>(unsigned a, fixed const& b)
-{
-    return fixed(a)>b;
-}
-inline bool operator>(int a, fixed const& b)
-{
-    return fixed(a)>b;
-}
-inline bool operator>(unsigned short a, fixed const& b)
-{
-    return fixed(a)>b;
-}
-inline bool operator>(short a, fixed const& b)
-{
-    return fixed(a)>b;
-}
-inline bool operator>(unsigned char a, fixed const& b)
-{
-    return fixed(a)>b;
-}
-inline bool operator>(char a, fixed const& b)
-{
-    return fixed(a)>b;
-}
-
-inline bool operator>(fixed const& a,double b)
-{
-    return a>fixed(b);
-}
-inline bool operator>(fixed const& a,float b)
-{
-    return a>fixed(b);
-}
-inline bool operator>(fixed const& a,unsigned long b)
-{
-    return a>fixed(b);
-}
-inline bool operator>(fixed const& a,long b)
-{
-    return a>fixed(b);
-}
-inline bool operator>(fixed const& a,unsigned b)
-{
-    return a>fixed(b);
-}
-inline bool operator>(fixed const& a,int b)
-{
-    return a>fixed(b);
-}
-inline bool operator>(fixed const& a,unsigned short b)
-{
-    return a>fixed(b);
-}
-inline bool operator>(fixed const& a,short b)
-{
-    return a>fixed(b);
-}
-inline bool operator>(fixed const& a,unsigned char b)
-{
-    return a>fixed(b);
-}
-inline bool operator>(fixed const& a,char b)
-{
-    return a>fixed(b);
-}
-
-inline bool operator<=(double a, fixed const& b)
-{
-    return fixed(a)<=b;
-}
-inline bool operator<=(float a, fixed const& b)
-{
-    return fixed(a)<=b;
-}
-
-inline bool operator<=(unsigned long a, fixed const& b)
-{
-    return fixed(a)<=b;
-}
-inline bool operator<=(long a, fixed const& b)
-{
-    return fixed(a)<=b;
-}
-inline bool operator<=(unsigned a, fixed const& b)
-{
-    return fixed(a)<=b;
-}
-inline bool operator<=(int a, fixed const& b)
-{
-    return fixed(a)<=b;
-}
-inline bool operator<=(unsigned short a, fixed const& b)
-{
-    return fixed(a)<=b;
-}
-inline bool operator<=(short a, fixed const& b)
-{
-    return fixed(a)<=b;
-}
-inline bool operator<=(unsigned char a, fixed const& b)
-{
-    return fixed(a)<=b;
-}
-inline bool operator<=(char a, fixed const& b)
-{
-    return fixed(a)<=b;
-}
-
-inline bool operator<=(fixed const& a,double b)
-{
-    return a<=fixed(b);
-}
-inline bool operator<=(fixed const& a,float b)
-{
-    return a<=fixed(b);
-}
-inline bool operator<=(fixed const& a,unsigned long b)
-{
-    return a<=fixed(b);
-}
-inline bool operator<=(fixed const& a,long b)
-{
-    return a<=fixed(b);
-}
-inline bool operator<=(fixed const& a,unsigned b)
-{
-    return a<=fixed(b);
-}
-inline bool operator<=(fixed const& a,int b)
-{
-    return a<=fixed(b);
-}
-inline bool operator<=(fixed const& a,unsigned short b)
-{
-    return a<=fixed(b);
-}
-inline bool operator<=(fixed const& a,short b)
-{
-    return a<=fixed(b);
-}
-inline bool operator<=(fixed const& a,unsigned char b)
-{
-    return a<=fixed(b);
-}
-inline bool operator<=(fixed const& a,char b)
-{
-    return a<=fixed(b);
-}
-
-inline bool operator>=(double a, fixed const& b)
-{
-    return fixed(a)>=b;
-}
-inline bool operator>=(float a, fixed const& b)
-{
-    return fixed(a)>=b;
-}
-
-inline bool operator>=(unsigned long a, fixed const& b)
-{
-    return fixed(a)>=b;
-}
-inline bool operator>=(long a, fixed const& b)
-{
-    return fixed(a)>=b;
-}
-inline bool operator>=(unsigned a, fixed const& b)
-{
-    return fixed(a)>=b;
-}
-inline bool operator>=(int a, fixed const& b)
-{
-    return fixed(a)>=b;
-}
-inline bool operator>=(unsigned short a, fixed const& b)
-{
-    return fixed(a)>=b;
-}
-inline bool operator>=(short a, fixed const& b)
-{
-    return fixed(a)>=b;
-}
-inline bool operator>=(unsigned char a, fixed const& b)
-{
-    return fixed(a)>=b;
-}
-inline bool operator>=(char a, fixed const& b)
-{
-    return fixed(a)>=b;
-}
-
-inline bool operator>=(fixed const& a,double b)
-{
-    return a>=fixed(b);
-}
-inline bool operator>=(fixed const& a,float b)
-{
-    return a>=fixed(b);
-}
-inline bool operator>=(fixed const& a,unsigned long b)
-{
-    return a>=fixed(b);
-}
-inline bool operator>=(fixed const& a,long b)
-{
-    return a>=fixed(b);
-}
-inline bool operator>=(fixed const& a,unsigned b)
-{
-    return a>=fixed(b);
-}
-inline bool operator>=(fixed const& a,int b)
-{
-    return a>=fixed(b);
-}
-inline bool operator>=(fixed const& a,unsigned short b)
-{
-    return a>=fixed(b);
-}
-inline bool operator>=(fixed const& a,short b)
-{
-    return a>=fixed(b);
-}
-inline bool operator>=(fixed const& a,unsigned char b)
-{
-    return a>=fixed(b);
-}
-inline bool operator>=(fixed const& a,char b)
-{
-    return a>=fixed(b);
+  return fixed(pow((double)x, (double)y));
 }
 
 inline fixed sin(fixed const& x)
 {
-    return x.sin();
+  return x.sin();
 }
 inline fixed cos(fixed const& x)
 {
-    return x.cos();
+  return x.cos();
 }
 inline fixed tan(fixed const& x)
 {
-    return x.tan();
+  return x.tan();
 }
-
 inline fixed atan(fixed const& x)
 {
     return x.atan();
 }
-
-inline fixed max(fixed const& x, fixed const& y)
+inline fixed accurate_half_sin(fixed const& x)
 {
-  return (x>y? x:y);
+  return x.accurate_half_sin();
 }
 
-inline fixed min(fixed const& x, fixed const& y)
-{
-  return (x<y? x:y);
-}
-
+gcc_pure
 inline fixed atan2(fixed const& y, fixed const& x)
 {
   return fixed::atan2(y,x);
 }
 
-inline fixed sqrt(fixed const& x)
+static inline fixed asin(fixed x)
 {
-    return x.sqrt();
+  return atan2(x, (fixed_one-x*x).sqrt());
 }
 
+static inline fixed acos(fixed x)
+{
+  return atan2((fixed_one-x*x).sqrt(), x);
+}
+
+gcc_pure
+inline fixed sqr(fixed const& x)
+{
+  return x.sqr();
+}
+
+gcc_pure
+inline fixed sqrt(fixed const& x)
+{
+  return x.sqrt();
+}
+
+gcc_pure
+inline fixed fast_sqrt(fixed const& x)
+{
+  assert(!x.negative());
+  if (!x.positive())
+    return fixed_zero;
+  return x.rsqrt()*x;
+}
+
+gcc_pure
+inline fixed rsqrt(fixed const& x)
+{
+  return x.rsqrt();
+}
+
+gcc_const
+inline fixed hypot(fixed x, fixed y)
+{
+  return sqrt(sqr(x) + sqr(y));
+}
+
+gcc_pure
 inline fixed exp(fixed const& x)
 {
     return x.exp();
 }
 
+gcc_pure
 inline fixed log(fixed const& x)
 {
     return x.log();
+}
+
+inline fixed trunc(fixed x)
+{
+  return x.trunc();
 }
 
 inline fixed floor(fixed const& x)
@@ -1595,53 +843,50 @@ inline fixed floor(fixed const& x)
     return x.floor();
 }
 
+gcc_pure
 inline fixed ceil(fixed const& x)
 {
     return x.ceil();
 }
 
-inline fixed abs(fixed const& x)
-{
-    return x.abs();
-}
-
+gcc_pure
 inline fixed fabs(fixed const& x)
 {
     return x.abs();
 }
 
+gcc_pure
 inline fixed modf(fixed const& x,fixed*integral_part)
 {
     return x.modf(integral_part);
 }
 
-inline fixed fixed::ceil() const
-{
-    if(m_nVal%fixed_resolution)
+gcc_pure
+static inline fixed fmod(fixed x, fixed y)
     {
-        return floor()+1;
+  return fixed(fmod((double)x, (double)y));
     }
-    else
+
+inline fixed fixed::ceil() const
     {
+  if (m_nVal%resolution)
+    return floor() + fixed(1);
+  else
         return *this;
     }
-}
 
 inline fixed fixed::floor() const
 {
     fixed res(*this);
-    __int64 const remainder=m_nVal%fixed_resolution;
-    if(remainder)
-    {
+  value_t const remainder=m_nVal%resolution;
+  if (remainder) {
         res.m_nVal-=remainder;
         if(m_nVal<0)
-        {
-            res-=1;
-        }
+      res -= fixed(1);
     }
+
     return res;
 }
-
 
 inline fixed fixed::sin() const
 {
@@ -1676,10 +921,10 @@ inline fixed fixed::abs() const
 
 inline fixed fixed::modf(fixed*integral_part) const
 {
-    __int64 fractional_part=m_nVal%fixed_resolution;
+  value_t fractional_part=m_nVal%resolution;
     if(m_nVal<0 && fractional_part>0)
     {
-        fractional_part-=fixed_resolution;
+      fractional_part-=resolution;
     }
     integral_part->m_nVal=m_nVal-fractional_part;
     return fixed(internal(),fractional_part);
@@ -1690,6 +935,11 @@ inline void sin_cos(fixed const& theta,fixed* s,fixed*c)
   ::fixed::sin_cos(theta, s, c);
 }
 
+gcc_pure
+inline fixed sigmoid(fixed const& x)
+{
+  return ::fixed::sigmoid(x);
+}
 
 namespace std
 {
@@ -1710,44 +960,44 @@ namespace std
     }
 }
 
-fixed const fixed_max(fixed::internal(),0x7fffffffffffffffLL);
-fixed const fixed_one(fixed::internal(),1<<(fixed_resolution_shift));
-fixed const fixed_two(fixed::internal(),1<<(fixed_resolution_shift+1));
-fixed const fixed_four(fixed::internal(),1<<(fixed_resolution_shift+2));
-fixed const fixed_zero(fixed::internal(),0);
-fixed const fixed_half(fixed::internal(),1<<(fixed_resolution_shift-1));
-extern fixed const fixed_pi;
-extern fixed const fixed_two_pi;
-extern fixed const fixed_half_pi;
-extern fixed const fixed_quarter_pi;
-extern fixed const fixed_deg_to_rad;
-extern fixed const fixed_rad_to_deg;
-extern fixed const fixed_360;
-extern fixed const fixed_180;
+#define fixed_max fixed(fixed::internal(), 0x7fffffffffffffffLL)
 
+inline fixed fixed::sigmoid(const fixed&x) {
+  return fixed_two/(fixed_one+(-x).exp())-fixed_one;
+}
+
+gcc_pure
 inline bool positive(const fixed&f) {
   return f.positive();
-};
+}
 
+gcc_pure
 inline bool negative(const fixed&f) {
   return f.negative();
-};
+}
+
+gcc_const
+static inline fixed
+half(fixed a)
+{
+  return a.half();
+}
 
 #endif
 
 inline void limit_tolerance(fixed& f, const fixed tol_act) {
-  if (positive(f)) {
-    if (f<tol_act) {
-      f= tol_act;
-    }
-    return;
+  if (fabs(f)<tol_act) {
+    f = positive(f)? tol_act:-tol_act;
   }
-  if (negative(f)) {
-    if (f>-tol_act) {
-      f= -tol_act;
-    }
-    return;
   }
+
+/**
+ * Convert this number to an unsigned integer, with rounding.
+ */
+gcc_const static inline unsigned
+uround(const fixed x)
+{
+  return (unsigned)(x + fixed_half);
 }
 
 #endif
