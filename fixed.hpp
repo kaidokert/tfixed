@@ -7,6 +7,10 @@
 //
 // Extensions and bug/compilation fixes by John Wharington 2009
 
+#include <algorithm>
+using std::max;
+using std::min;
+
 #ifndef FIXED_MATH
 #include <math.h>
 #define FIXED_DOUBLE(x) (x)
@@ -15,16 +19,18 @@ typedef double fixed;
 #define fixed_zero 0.0
 #define fixed_half 0.5
 #define fixed_one 1.0
+#define fixed_two 2.0
+#define fixed_four 4.0
 #define fixed_deg_to_rad					0.0174532925199432958
 #define fixed_rad_to_deg					57.2957795131
 #define fixed_pi 3.1415926
 #define fixed_two_pi 2.0*3.1415926
 #define fixed_360 360
-#include <algorithm>
-#define min std::min
-#define max std::max
+#define fixed_180 180
 
 void sin_cos(const double&theta, double*s, double*c);
+#define positive(x) (x>0)
+#define negative(x) (x<0)
 
 #else
 #define FIXED_DOUBLE(x) x.as_double()
@@ -32,11 +38,16 @@ void sin_cos(const double&theta, double*s, double*c);
 
 #include <ostream>
 #include <complex>
-#include <boost/cstdint.hpp>
 #include <climits>
 
+#ifdef HAVE_BOOST
+#include <boost/cstdint.hpp>
 typedef boost::int64_t __int64;
 typedef boost::uint64_t __uint64;
+#else
+#include <stdint.h>
+typedef unsigned __int64    __uint64;
+#endif
 
 unsigned const fixed_resolution_shift=28;
 __int64 const fixed_resolution=1<<fixed_resolution_shift; // JMW was LL
@@ -63,15 +74,15 @@ public:
 //    {}
     
     fixed(long nVal):
-        m_nVal(__int64(nVal)<<fixed_resolution_shift)
+        m_nVal((__int64)(nVal)<<fixed_resolution_shift)
     {}
     
     fixed(int nVal):
-        m_nVal(__int64(nVal)<<fixed_resolution_shift)
+        m_nVal((__int64)(nVal)<<fixed_resolution_shift)
     {}
     
     fixed(short nVal):
-        m_nVal(__int64(nVal)<<fixed_resolution_shift)
+        m_nVal((__int64)(nVal)<<fixed_resolution_shift)
     {}
     
 /*    
@@ -80,13 +91,13 @@ public:
     {}
 */  
     fixed(unsigned long nVal):
-        m_nVal(__int64(nVal)<<fixed_resolution_shift)
+        m_nVal((__int64)(nVal)<<fixed_resolution_shift)
     {}
     fixed(unsigned int nVal):
-        m_nVal(__int64(nVal)<<fixed_resolution_shift)
+        m_nVal((__int64)(nVal)<<fixed_resolution_shift)
     {}
     fixed(unsigned short nVal):
-        m_nVal(__int64(nVal)<<fixed_resolution_shift)
+        m_nVal((__int64)(nVal)<<fixed_resolution_shift)
     {}
     fixed(double nVal):
         m_nVal(static_cast<__int64>(nVal*static_cast<double>(fixed_resolution)))
@@ -141,6 +152,10 @@ public:
     inline operator short() const
     {
         return as_short();
+    }
+    inline operator int() const
+    {
+        return as_int();
     }
     inline operator unsigned short() const
     {
@@ -206,6 +221,9 @@ public:
         m_nVal -= fixed_resolution;
         return *this;
     }
+
+  bool positive() const;
+  bool negative() const;
 
     fixed floor() const;
     fixed ceil() const;
@@ -374,6 +392,16 @@ public:
 inline std::ostream& operator<<(std::ostream& os,fixed const& value)
 {
     return os<<value.as_double();
+}
+
+inline bool fixed::positive() const
+{
+  return (m_nVal>0);
+}
+
+inline bool fixed::negative() const
+{
+  return (m_nVal<0);
 }
 
 inline fixed operator-(double a, fixed const& b)
@@ -1577,6 +1605,11 @@ inline fixed abs(fixed const& x)
     return x.abs();
 }
 
+inline fixed fabs(fixed const& x)
+{
+    return x.abs();
+}
+
 inline fixed modf(fixed const& x,fixed*integral_part)
 {
     return x.modf(integral_part);
@@ -1677,8 +1710,10 @@ namespace std
     }
 }
 
-fixed const fixed_max(fixed::internal(),0x7fffffffffffffff);
+fixed const fixed_max(fixed::internal(),0x7fffffffffffffffLL);
 fixed const fixed_one(fixed::internal(),1<<(fixed_resolution_shift));
+fixed const fixed_two(fixed::internal(),1<<(fixed_resolution_shift+1));
+fixed const fixed_four(fixed::internal(),1<<(fixed_resolution_shift+2));
 fixed const fixed_zero(fixed::internal(),0);
 fixed const fixed_half(fixed::internal(),1<<(fixed_resolution_shift-1));
 extern fixed const fixed_pi;
@@ -1690,5 +1725,29 @@ extern fixed const fixed_rad_to_deg;
 extern fixed const fixed_360;
 extern fixed const fixed_180;
 
+inline bool positive(const fixed&f) {
+  return f.positive();
+};
+
+inline bool negative(const fixed&f) {
+  return f.negative();
+};
+
 #endif
+
+inline void limit_tolerance(fixed& f, const fixed tol_act) {
+  if (positive(f)) {
+    if (f<tol_act) {
+      f= tol_act;
+    }
+    return;
+  }
+  if (negative(f)) {
+    if (f>-tol_act) {
+      f= -tol_act;
+    }
+    return;
+  }
+}
+
 #endif
