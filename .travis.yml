@@ -16,5 +16,9 @@ addons:
 install:
   - if test -n "$COVERAGE" ; then echo Coverage on; fi
 
+before_script:
+  - cmake --version
+  - export
+
 script:
   - echo stub
