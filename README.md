@@ -1,6 +1,7 @@
 This is fixed point library by Anthony Williams, published in Dr. Dobbs April 2008 
 
-This code has been in https://github.com/XCSoar project, but was recently removed
+This code has been in https://github.com/XCSoar project, but was recently removed.
+
 Last revision:
 https://github.com/XCSoar/XCSoar/blob/45b4dbe7ebd601975c110f506fede2bd5bf8450f/src/Math/fixed.hpp 
 
